@@ -24,7 +24,7 @@ struct SceneSample {
 
 fn sampleScene(p: vec3f) -> SceneSample {
   let terrain = (p.y - terrainHeight(p.xz)) * TERRAIN_STEP_SCALE;
-  let rock = rockSdf(p);
+  let rock = rockSdf(p, terrain);
   if (rock < terrain) {
     return SceneSample(rock, MATERIAL_ROCK);
   }
@@ -68,9 +68,9 @@ fn softShadow(origin: vec3f, direction: vec3f) -> f32 {
 fn rockNormal(p: vec3f) -> vec3f {
   let e = vec2f(0.01, 0.0);
   return normalize(vec3f(
-      rockSdf(p + e.xyy) - rockSdf(p - e.xyy),
-      rockSdf(p + e.yxy) - rockSdf(p - e.yxy),
-      rockSdf(p + e.yyx) - rockSdf(p - e.yyx)));
+      rockSdf(p + e.xyy, ROCK_NO_LIMIT) - rockSdf(p - e.xyy, ROCK_NO_LIMIT),
+      rockSdf(p + e.yxy, ROCK_NO_LIMIT) - rockSdf(p - e.yxy, ROCK_NO_LIMIT),
+      rockSdf(p + e.yyx, ROCK_NO_LIMIT) - rockSdf(p - e.yyx, ROCK_NO_LIMIT)));
 }
 
 fn skyColor(direction: vec3f, sun: vec3f) -> vec3f {

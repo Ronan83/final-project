@@ -11,27 +11,42 @@ const ROCK_DISPLACEMENT_SCALE: f32 = 1.1;
 const ROCK_MAX_DISPLACEMENT: f32 = 0.55;
 const ROCK_LIPSCHITZ_SCALE: f32 = 0.6;
 const ROCK_BOUND_MARGIN: f32 = 0.8;
+// The surface satisfies |x| <= |rockShapeSpace(x)| <= 1 + max displacement, so
+// every rock lies inside this local-space sphere.
+// 石头表面满足 |x| <= |rockShapeSpace(x)| <= 1 + 最大位移，所以整块石头都在这个局部球内。
+const ROCK_MAX_RADIUS: f32 = 1.0 + ROCK_MAX_DISPLACEMENT;
 
-struct RockInstance {
-  center: vec3f,
+// Split in two so culling only pays for one hash: the pose needs a second hash,
+// yaw trigonometry and, most expensively, a terrain lookup.
+// 拆成两部分，让剔除只需要一次哈希：姿态还需要第二次哈希、偏航角三角函数，
+// 以及最贵的地形高度查询。
+struct RockPlacement {
+  centerXZ: vec2f,
   scale: f32,
-  cosYaw: f32,
-  sinYaw: f32,
-  species: u32,
   exists: bool,
 };
 
-fn rockInstance(cell: vec2f) -> RockInstance {
+struct RockPose {
+  center: vec3f,
+  cosYaw: f32,
+  sinYaw: f32,
+  species: u32,
+};
+
+fn rockPlacement(cell: vec2f) -> RockPlacement {
   let r = hash33(vec3f(cell, 7.0));
-  let s = hash33(vec3f(cell, 11.0));
-  let scale = 1.5 + 2.5 * r.x;
   let centerXZ = (cell + 0.5) * ROCK_CELL_SIZE + (r.xy - 0.5) * ROCK_CELL_SIZE * 0.4;
+  return RockPlacement(centerXZ, 1.5 + 2.5 * r.x, r.z <= ROCK_SPAWN_PROBABILITY);
+}
+
+fn rockPose(cell: vec2f, placement: RockPlacement) -> RockPose {
+  let s = hash33(vec3f(cell, 11.0));
   let yaw = s.x * 6.2831853;
-  return RockInstance(
-      vec3f(centerXZ.x, terrainHeight(centerXZ) - 0.15 * scale, centerXZ.y),
-      scale, cos(yaw), sin(yaw),
-      min(u32(s.y * f32(ROCK_SPECIES_COUNT)), ROCK_SPECIES_COUNT - 1u),
-      r.z <= ROCK_SPAWN_PROBABILITY);
+  let center = vec3f(placement.centerXZ.x,
+                     terrainHeight(placement.centerXZ) - 0.15 * placement.scale,
+                     placement.centerXZ.y);
+  return RockPose(center, cos(yaw), sin(yaw),
+                  min(u32(s.y * f32(ROCK_SPECIES_COUNT)), ROCK_SPECIES_COUNT - 1u));
 }
 
 // Space in which a species' base shape is the unit sphere.

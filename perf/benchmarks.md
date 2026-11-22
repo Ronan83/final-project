@@ -18,3 +18,8 @@ Measured per pass with WebGPU timestamp queries, averaged over 30 frames.
 |---|---|---|---|---|---|---|
 | 2026-11-22 | Procedural (teacher, 6-octave fbm3) | 0.5 | 1280×673 | 58.65 | 0.07 | 17.0 |
 | 2026-11-22 | Neural baseline (39→64→64→1 SiLU MLP, scalar loops, storage-buffer weights) | 0.5 | 1280×673 | 64.77 | 0.07 | 15.4 |
+| 2026-11-22 | Procedural + 9a exact cell culling (existence check, cylinder bound vs. nearest surface, deferred pose/terrain lookup) | 0.5 | 1280×673 | 26.79 | 0.07 | 36.9 |
+| 2026-11-22 | Neural + 9a exact cell culling | 0.5 | 1280×673 | 30.75 | 0.07 | 32.3 |
+
+9a speed-up on the scene pass: procedural 2.19× (58.65 → 26.79 ms), neural 2.11× (64.77 → 30.75 ms). Procedural output is pixel-identical.
+9a 让 scene pass 提速：程序化 2.19 倍，神经 2.11 倍；程序化模式输出逐像素一致。
