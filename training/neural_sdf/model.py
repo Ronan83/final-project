@@ -1,4 +1,4 @@
-"""Neural SDF model: positional encoding followed by a small ReLU MLP."""
+"""Neural SDF model: positional encoding followed by a small MLP."""
 
 from __future__ import annotations
 
@@ -30,16 +30,29 @@ class PositionalEncoding(nn.Module):
         return torch.cat(features, dim=-1)
 
 
-class NeuralSdf(nn.Module):
-    """Positional encoding + MLP with `hidden_layers` ReLU layers of `hidden_width`."""
+# Smooth activations give smooth SDFs; ReLU makes the surface piecewise planar,
+# which shows up as faceted shading because normals come from SDF gradients.
+ACTIVATIONS: dict[str, type[nn.Module]] = {'relu': nn.ReLU, 'silu': nn.SiLU}
 
-    def __init__(self, num_frequencies: int, hidden_width: int, hidden_layers: int) -> None:
+
+class NeuralSdf(nn.Module):
+    """Positional encoding + MLP with `hidden_layers` hidden layers of `hidden_width`."""
+
+    def __init__(self,
+                 num_frequencies: int,
+                 hidden_width: int,
+                 hidden_layers: int,
+                 activation: str = 'silu') -> None:
         super().__init__()
+        if activation not in ACTIVATIONS:
+            raise ValueError(
+                f'unknown activation {activation!r}; expected one of {list(ACTIVATIONS)}')
+        self.activation = activation
         self.encoding = PositionalEncoding(num_frequencies)
         layers: list[nn.Module] = []
         in_features = self.encoding.output_dim
         for _ in range(hidden_layers):
-            layers += [nn.Linear(in_features, hidden_width), nn.ReLU()]
+            layers += [nn.Linear(in_features, hidden_width), ACTIVATIONS[activation]()]
             in_features = hidden_width
         layers.append(nn.Linear(in_features, 1))
         self.mlp = nn.Sequential(*layers)

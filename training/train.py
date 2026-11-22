@@ -37,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--hidden-width', type=int, default=64)
     parser.add_argument('--hidden-layers', type=int, default=2)
     parser.add_argument('--frequencies', type=int, default=6)
+    parser.add_argument('--activation', choices=['silu', 'relu'], default='silu')
     parser.add_argument('--learning-rate', type=float, default=1e-3)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--device', default='auto', help='auto, cuda, mps or cpu')
@@ -96,7 +97,8 @@ def train_species(species: int, args: argparse.Namespace, device: torch.device) 
     train_points, train_targets = build_dataset(species, args.dataset_size, generator, device)
     eval_points, eval_targets = build_dataset(species, 1 << 18, generator, device)
 
-    model = NeuralSdf(args.frequencies, args.hidden_width, args.hidden_layers).to(device)
+    model = NeuralSdf(args.frequencies, args.hidden_width, args.hidden_layers,
+                      args.activation).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.steps)
 
@@ -134,6 +136,7 @@ def train_species(species: int, args: argparse.Namespace, device: torch.device) 
                 'dataset_size': args.dataset_size,
                 'hidden_width': args.hidden_width,
                 'hidden_layers': args.hidden_layers,
+                'activation': args.activation,
                 'learning_rate': args.learning_rate,
                 'seed': args.seed,
             },

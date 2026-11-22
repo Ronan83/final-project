@@ -38,5 +38,10 @@ export async function initGpu(canvas: HTMLCanvasElement): Promise<GpuContext> {
   const format = navigator.gpu.getPreferredCanvasFormat();
   context.configure({device, format, alphaMode: 'opaque'});
 
-  return {device, context, format, features: new Set(requiredFeatures)};
+  // Report what the device actually enabled rather than what was requested.
+  // 以设备实际启用的特性为准，而不是请求的特性。
+  const features = new Set(
+    requiredFeatures.filter(feature => device.features.has(feature)),
+  );
+  return {device, context, format, features};
 }

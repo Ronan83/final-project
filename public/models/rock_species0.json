@@ -6,7 +6,7 @@
     "num_frequencies": 6,
     "layout": "x, then sin/cos pairs per frequency (each xyz)"
   },
-  "activation": "relu",
+  "activation": "silu",
   "weights": {
     "file": "rock_species0.bin",
     "dtype": "float32",
@@ -37,10 +37,10 @@
   "training_box_half_extent": 1.8,
   "bound_margin": 0.8,
   "metrics": {
-    "mae": 0.013137557543814182,
-    "mae_near_surface": 0.01077809277921915,
-    "max_error": 0.46717825531959534,
-    "sign_accuracy": 0.988922119140625
+    "mae": 0.028214365243911743,
+    "mae_near_surface": 0.014051203615963459,
+    "max_error": 0.4286477565765381,
+    "sign_accuracy": 0.9849853515625
   },
   "hyperparameters": {
     "steps": 8000,
@@ -48,6 +48,7 @@
     "dataset_size": 2097152,
     "hidden_width": 64,
     "hidden_layers": 2,
+    "activation": "silu",
     "learning_rate": 0.001,
     "seed": 0
   }

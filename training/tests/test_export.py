@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 
 from neural_sdf.export import FORMAT_VERSION, export_model, load_weights
@@ -25,13 +26,14 @@ def _reference_forward(manifest: dict, weights: np.ndarray, x: np.ndarray) -> np
         b = weights[layer['bias_offset']:layer['bias_offset'] + layer['out_features']]
         h = h @ w.T + b
         if i < len(layers) - 1:
-            h = np.maximum(h, 0.0)
+            h = np.maximum(h, 0.0) if manifest['activation'] == 'relu' else h / (1.0 + np.exp(-h))
     return h[..., 0]
 
 
-def test_export_round_trip(tmp_path: Path) -> None:
+@pytest.mark.parametrize('activation', ['relu', 'silu'])
+def test_export_round_trip(tmp_path: Path, activation: str) -> None:
     torch.manual_seed(0)
-    model = NeuralSdf(num_frequencies=4, hidden_width=16, hidden_layers=2)
+    model = NeuralSdf(num_frequencies=4, hidden_width=16, hidden_layers=2, activation=activation)
     _, json_path = export_model(model, tmp_path, 'test_model', {'species': 0})
 
     manifest, weights = load_weights(json_path)

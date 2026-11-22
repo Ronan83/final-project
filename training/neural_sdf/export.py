@@ -48,7 +48,7 @@ def export_model(model: NeuralSdf, out_dir: Path, name: str,
             'num_frequencies': model.encoding.num_frequencies,
             'layout': 'x, then sin/cos pairs per frequency (each xyz)',
         },
-        'activation': 'relu',
+        'activation': model.activation,
         'weights': {
             'file': bin_path.name,
             'dtype': 'float32',

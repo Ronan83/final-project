@@ -1,15 +1,24 @@
 import type {CameraState} from './camera';
 import type {GpuContext} from './gpu/context';
+import {GpuTimer} from './gpu/gpuTimer';
 import {createShaderModule} from './gpu/shader';
+import {
+  architectureToWgsl,
+  FALLBACK_ARCHITECTURE,
+  type RockModels,
+} from './neural/rockModels';
 import blitSource from './shaders/blit.wgsl?raw';
 import commonSource from './shaders/common.wgsl?raw';
+import neuralSource from './shaders/neural.wgsl?raw';
 import noiseSource from './shaders/noise.wgsl?raw';
+import rockFieldSource from './shaders/rockField.wgsl?raw';
 import rocksSource from './shaders/rocks.wgsl?raw';
 import sceneSource from './shaders/scene.wgsl?raw';
 import terrainSource from './shaders/terrain.wgsl?raw';
 
 const WORKGROUP_SIZE = 8;
 const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
+const TIMED_PASSES = ['scene', 'blit'] as const;
 
 /** Float offsets into FrameUniforms (common.wgsl); each vec3 is padded to 16 bytes. */
 const FRAME_UNIFORM_LAYOUT = {
@@ -22,6 +31,9 @@ const FRAME_UNIFORM_LAYOUT = {
   cameraUp: 16,
   floatCount: 20,
 } as const;
+
+export type RockMode = 'procedural' | 'neural';
+export type TimedPass = (typeof TIMED_PASSES)[number];
 
 export interface FrameInput {
   readonly timeSeconds: number;
@@ -50,20 +62,38 @@ export class Renderer {
   );
   private readonly sceneLayout: GPUBindGroupLayout;
   private readonly blitLayout: GPUBindGroupLayout;
-  private readonly scenePipeline: GPUComputePipeline;
+  private readonly rockWeightBuffer: GPUBuffer;
+  private readonly scenePipelines: Readonly<
+    Record<RockMode, GPUComputePipeline>
+  >;
+  private readonly hasNeuralRocks: boolean;
+  private rockMode: RockMode = 'procedural';
   private readonly blitPipeline: GPURenderPipeline;
   private readonly sampler: GPUSampler;
+  private readonly timer: GpuTimer<TimedPass> | null;
   private target: RenderTarget | null = null;
 
-  constructor(gpu: GpuContext) {
+  /** `rockModels` may be null, in which case only procedural rocks are available. */
+  constructor(gpu: GpuContext, rockModels: RockModels | null) {
     this.device = gpu.device;
     this.context = gpu.context;
+    this.hasNeuralRocks = rockModels !== null;
 
     this.uniformBuffer = this.device.createBuffer({
       label: 'frame uniforms',
       size: this.uniformData.byteLength,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+
+    // Storage bindings cannot be empty, so keep a small placeholder without models.
+    // storage 绑定不能为空，没有模型时用一个很小的占位 buffer。
+    const weights = rockModels?.weights ?? new Float32Array(4);
+    this.rockWeightBuffer = this.device.createBuffer({
+      label: 'rock weights',
+      size: weights.byteLength,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    this.device.queue.writeBuffer(this.rockWeightBuffer, 0, weights);
 
     this.sceneLayout = this.device.createBindGroupLayout({
       label: 'scene',
@@ -77,6 +107,11 @@ export class Renderer {
           binding: 1,
           visibility: GPUShaderStage.COMPUTE,
           buffer: {type: 'uniform'},
+        },
+        {
+          binding: 2,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: {type: 'read-only-storage'},
         },
       ],
     });
@@ -96,23 +131,38 @@ export class Renderer {
       ],
     });
 
-    this.scenePipeline = this.device.createComputePipeline({
-      label: 'scene',
-      layout: this.device.createPipelineLayout({
-        bindGroupLayouts: [this.sceneLayout],
-      }),
-      compute: {
-        module: createShaderModule(this.device, 'scene', [
-          commonSource,
-          noiseSource,
-          terrainSource,
-          rocksSource,
-          sceneSource,
-        ]),
-        entryPoint: 'renderScene',
-        constants: {WORKGROUP_SIZE},
-      },
+    const sceneModule = createShaderModule(this.device, 'scene', [
+      commonSource,
+      noiseSource,
+      terrainSource,
+      rocksSource,
+      architectureToWgsl(rockModels?.architecture ?? FALLBACK_ARCHITECTURE),
+      neuralSource,
+      rockFieldSource,
+      sceneSource,
+    ]);
+    const sceneLayout = this.device.createPipelineLayout({
+      bindGroupLayouts: [this.sceneLayout],
     });
+    // One module, two specializations: the override lets the compiler drop the
+    // unused rock evaluator entirely.
+    // 同一个 shader 模块编译出两个版本：override 常量让编译器彻底去掉用不到的那条分支。
+    const makeScenePipeline = (useNeuralRocks: boolean) =>
+      this.device.createComputePipeline({
+        label: useNeuralRocks
+          ? 'scene (neural rocks)'
+          : 'scene (procedural rocks)',
+        layout: sceneLayout,
+        compute: {
+          module: sceneModule,
+          entryPoint: 'renderScene',
+          constants: {WORKGROUP_SIZE, USE_NEURAL_ROCKS: useNeuralRocks ? 1 : 0},
+        },
+      });
+    this.scenePipelines = {
+      procedural: makeScenePipeline(false),
+      neural: makeScenePipeline(true),
+    };
 
     const blitModule = createShaderModule(this.device, 'blit', [blitSource]);
     this.blitPipeline = this.device.createRenderPipeline({
@@ -132,11 +182,27 @@ export class Renderer {
       magFilter: 'linear',
       minFilter: 'linear',
     });
+
+    this.timer = gpu.features.has('timestamp-query')
+      ? new GpuTimer(this.device, TIMED_PASSES)
+      : null;
+  }
+
+  /** Per-pass GPU timer, or null without the 'timestamp-query' feature. */
+  get gpuTimer(): GpuTimer<TimedPass> | null {
+    return this.timer;
   }
 
   /** Render resolution in pixels, or [0, 0] before the first resize. */
   get renderSize(): readonly [number, number] {
     return this.target ? [this.target.width, this.target.height] : [0, 0];
+  }
+
+  setRockMode(mode: RockMode): void {
+    if (mode === 'neural' && !this.hasNeuralRocks) {
+      throw new Error('Neural rock models were not loaded.');
+    }
+    this.rockMode = mode;
   }
 
   /** Recreates the HDR target for a new output size or render scale. */
@@ -162,6 +228,7 @@ export class Renderer {
         entries: [
           {binding: 0, resource: view},
           {binding: 1, resource: {buffer: this.uniformBuffer}},
+          {binding: 2, resource: {buffer: this.rockWeightBuffer}},
         ],
       }),
       blitBindGroup: this.device.createBindGroup({
@@ -181,8 +248,11 @@ export class Renderer {
     this.writeUniforms(frame, target);
     const encoder = this.device.createCommandEncoder({label: 'frame'});
 
-    const scenePass = encoder.beginComputePass({label: 'scene'});
-    scenePass.setPipeline(this.scenePipeline);
+    const scenePass = encoder.beginComputePass({
+      label: 'scene',
+      timestampWrites: this.timer?.timestampWrites('scene'),
+    });
+    scenePass.setPipeline(this.scenePipelines[this.rockMode]);
     scenePass.setBindGroup(0, target.sceneBindGroup);
     scenePass.dispatchWorkgroups(
       Math.ceil(target.width / WORKGROUP_SIZE),
@@ -200,13 +270,16 @@ export class Renderer {
           clearValue: [0, 0, 0, 1],
         },
       ],
+      timestampWrites: this.timer?.timestampWrites('blit'),
     });
     blitPass.setPipeline(this.blitPipeline);
     blitPass.setBindGroup(0, target.blitBindGroup);
     blitPass.draw(3);
     blitPass.end();
 
+    this.timer?.resolve(encoder);
     this.device.queue.submit([encoder.finish()]);
+    this.timer?.startReadback();
   }
 
   private writeUniforms(frame: FrameInput, target: RenderTarget): void {

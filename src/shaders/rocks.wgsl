@@ -34,42 +34,29 @@ fn rockInstance(cell: vec2f) -> RockInstance {
       r.z <= ROCK_SPAWN_PROBABILITY);
 }
 
+// Space in which a species' base shape is the unit sphere.
+// 在这个坐标空间里，每种石头的基础形状都是单位球。
+fn rockShapeSpace(x: vec3f, species: u32) -> vec3f {
+  return x * vec3f(1.0, 1.0 + 0.1 * f32(species), 1.0);
+}
+
+// Conservative distance for points the displacement cannot reach.
+// 位移够不到的远处点，返回保守的距离下界。
+fn rockFarBound(base: f32) -> f32 {
+  return (base - ROCK_MAX_DISPLACEMENT) * ROCK_LIPSCHITZ_SCALE;
+}
+
 // Procedural SDF of one species in local space. This is the teacher the neural SDF learns.
 // 某一种石头在局部空间的程序化 SDF，也就是神经 SDF 要学习的“老师”。
 fn rockLocalSdf(x: vec3f, species: u32) -> f32 {
-  let y = x * vec3f(1.0, 1.0 + 0.1 * f32(species), 1.0);
+  let y = rockShapeSpace(x, species);
   let base = length(y) - 1.0;
-  // Outside the displacement range the noise cannot reach the surface: use a cheap,
-  // conservative bound. The same margin defines the network's training domain.
-  // 超出位移范围后噪声不可能碰到表面，直接返回保守下界；这个范围也是网络的训练区域。
+  // The same margin bounds the network's training domain.
+  // 这个范围同时也是神经网络的训练区域。
   if (base > ROCK_BOUND_MARGIN) {
-    return (base - ROCK_MAX_DISPLACEMENT) * ROCK_LIPSCHITZ_SCALE;
+    return rockFarBound(base);
   }
   let seed = vec3f(17.0 * f32(species), 3.0, 0.0);
   let displacement = (fbm3(y * ROCK_NOISE_FREQUENCY + seed) - 0.5) * ROCK_DISPLACEMENT_SCALE;
   return (base + displacement) * ROCK_LIPSCHITZ_SCALE;
-}
-
-fn rockSdfInCell(p: vec3f, cell: vec2f) -> f32 {
-  let rock = rockInstance(cell);
-  if (!rock.exists) {
-    return 1e5;
-  }
-  let w = (p - rock.center) / rock.scale;
-  let local = vec3f(rock.cosYaw * w.x - rock.sinYaw * w.z, w.y,
-                    rock.sinYaw * w.x + rock.cosYaw * w.z);
-  return rockLocalSdf(local, rock.species) * rock.scale;
-}
-
-// A rock can extend into neighboring cells, so all 3x3 neighbors are tested.
-// 石头可能伸进相邻格子，所以要检查周围 3x3 个格子。
-fn rockSdf(p: vec3f) -> f32 {
-  let cell = floor(p.xz / ROCK_CELL_SIZE);
-  var d = 1e5;
-  for (var j = -1; j <= 1; j++) {
-    for (var i = -1; i <= 1; i++) {
-      d = min(d, rockSdfInCell(p, cell + vec2f(f32(i), f32(j))));
-    }
-  }
-  return d;
 }
